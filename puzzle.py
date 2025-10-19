@@ -2,6 +2,7 @@ import pygame
 import random
 import sys
 import math
+from collections import deque
 
 # 初始化pygame
 pygame.init()
@@ -26,11 +27,148 @@ DARK_BLUE = (0, 0, 139)
 ORANGE = (255, 165, 0)
 SILVER = (192, 192, 192)
 UI_BG = (30, 30, 30, 200)
+DARK_GREEN = (0, 100, 0)
+DARK_PURPLE = (100, 0, 100)
 
 # 创建游戏窗口
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Maze Adventure")
 clock = pygame.time.Clock()
+
+# 游戏状态
+class GameState:
+    MENU = "menu"
+    PLAYING = "playing"
+    GAME_OVER = "game_over"
+    VICTORY = "victory"
+
+# 难度模式
+class Difficulty:
+    NORMAL = "normal"
+    HARD = "hard"
+
+# 小怪物类 - 改进的寻路算法
+class Monster:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.target_x = x
+        self.target_y = y
+        self.move_timer = 0
+        self.move_interval = 0.4  # 移动间隔（秒）- 加快速度
+        self.active = False
+        self.move_count = 0
+        
+    def update(self, dt, player_x, player_y, maze):
+        if not self.active:
+            return
+            
+        self.move_timer += dt
+        if self.move_timer >= self.move_interval:
+            self.move_timer = 0
+            self.move_towards_player(player_x, player_y, maze)
+    
+    def find_path_to_player(self, player_x, player_y, maze):
+        """使用BFS算法找到到玩家的最短路径"""
+        if self.x == player_x and self.y == player_y:
+            return []
+            
+        # BFS队列：(x, y, path)
+        queue = deque([(self.x, self.y, [])])
+        visited = set()
+        visited.add((self.x, self.y))
+        
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        
+        while queue:
+            x, y, path = queue.popleft()
+            
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                
+                # 检查是否到达玩家位置
+                if nx == player_x and ny == player_y:
+                    return path + [(dx, dy)]
+                
+                # 检查新位置是否有效且未访问过
+                if (0 <= nx < COLS and 0 <= ny < ROWS and 
+                    maze[ny][nx] == 0 and 
+                    (nx, ny) not in visited):
+                    
+                    visited.add((nx, ny))
+                    queue.append((nx, ny, path + [(dx, dy)]))
+        
+        # 如果没有找到路径，返回空列表
+        return []
+    
+    def move_towards_player(self, player_x, player_y, maze):
+        # 使用BFS找到到玩家的最短路径
+        path = self.find_path_to_player(player_x, player_y, maze)
+        
+        if path:
+            # 沿着路径的第一步移动
+            dx, dy = path[0]
+            new_x, new_y = self.x + dx, self.y + dy
+            
+            # 确保移动是有效的
+            if is_valid_move(maze, new_x, new_y):
+                self.x = new_x
+                self.y = new_y
+                self.move_count += 1
+        else:
+            # 如果没有找到路径，随机移动
+            directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            valid_directions = []
+            
+            for dx, dy in directions:
+                new_x, new_y = self.x + dx, self.y + dy
+                if is_valid_move(maze, new_x, new_y):
+                    valid_directions.append((dx, dy))
+            
+            if valid_directions:
+                dx, dy = random.choice(valid_directions)
+                self.x += dx
+                self.y += dy
+                self.move_count += 1
+    
+    def draw(self, screen):
+        if not self.active:
+            return
+            
+        center_x = self.x * CELL_SIZE + CELL_SIZE // 2
+        center_y = self.y * CELL_SIZE + CELL_SIZE // 2
+        
+        # 怪物身体（紫色）
+        body_radius = CELL_SIZE // 2 - 4
+        pygame.draw.circle(screen, PURPLE, (center_x, center_y), body_radius)
+        
+        # 怪物眼睛（红色）
+        eye_radius = 3
+        pygame.draw.circle(screen, RED, (center_x - 4, center_y - 3), eye_radius)
+        pygame.draw.circle(screen, RED, (center_x + 4, center_y - 3), eye_radius)
+        
+        # 怪物嘴巴
+        pygame.draw.arc(screen, RED, 
+                       (center_x - 6, center_y + 2, 12, 8), 
+                       0.2, 2.9, 2)
+        
+        # 怪物角
+        pygame.draw.polygon(screen, RED, [
+            (center_x - 3, center_y - body_radius),
+            (center_x - 8, center_y - body_radius - 8),
+            (center_x, center_y - body_radius - 4)
+        ])
+        pygame.draw.polygon(screen, RED, [
+            (center_x + 3, center_y - body_radius),
+            (center_x + 8, center_y - body_radius - 8),
+            (center_x, center_y - body_radius - 4)
+        ])
+        
+    def activate(self, player_x, player_y, maze):
+        # 怪物出生点为主角出生点 (1, 1)
+        self.x = 1
+        self.y = 1
+        self.active = True
 
 # 更复杂的迷宫生成算法
 def generate_maze():
@@ -172,10 +310,10 @@ class Spike:
                 screen.blit(glow_surface, (self.x * CELL_SIZE, self.y * CELL_SIZE))
 
 # 生成新的随机地刺位置
-def generate_random_spikes(maze, player_x, player_y, count=30):  # 增加到30个地刺
+def generate_random_spikes(maze, player_x, player_y, count=30):
     spikes = []
     attempts = 0
-    max_attempts = count * 15  # 增加最大尝试次数
+    max_attempts = count * 15
     
     # 计算可用的路径格子数量
     available_cells = 0
@@ -187,7 +325,7 @@ def generate_random_spikes(maze, player_x, player_y, count=30):  # 增加到30�
                 available_cells += 1
     
     # 如果可用格子太少，减少地刺数量
-    actual_count = min(count, available_cells - 5)  # 保留一些安全空间
+    actual_count = min(count, available_cells - 5)
     
     while len(spikes) < actual_count and attempts < max_attempts:
         x = random.randint(1, COLS-2)
@@ -204,12 +342,11 @@ def generate_random_spikes(maze, player_x, player_y, count=30):  # 增加到30�
             distance_to_player = math.sqrt((x - player_x)**2 + (y - player_y)**2)
             
             # 允许出现在主角附近，但不能太近（至少1格距离）
-            if distance_to_player >= 1.2:  # 稍微减少安全距离以放置更多地刺
+            if distance_to_player >= 1.2:
                 spikes.append(Spike(x, y))
         
         attempts += 1
     
-    print(f"Generated {len(spikes)} spikes (target: {actual_count})")
     return spikes
 
 # 绘制半透明UI背景
@@ -218,6 +355,17 @@ def draw_ui_panel(rect, alpha=200):
     s.fill((30, 30, 30, alpha))
     screen.blit(s, (rect.x, rect.y))
     pygame.draw.rect(screen, WHITE, rect, 2, border_radius=10)
+
+# 绘制按钮
+def draw_button(text, rect, color, hover_color, is_hovered):
+    button_color = hover_color if is_hovered else color
+    pygame.draw.rect(screen, button_color, rect, border_radius=12)
+    pygame.draw.rect(screen, WHITE, rect, 3, border_radius=12)
+    
+    font = pygame.font.SysFont("arial", 28, bold=True)
+    text_surface = font.render(text, True, WHITE)
+    text_rect = text_surface.get_rect(center=rect.center)
+    screen.blit(text_surface, text_rect)
 
 # 绘制主角（年轻冒险者）
 def draw_player(x, y):
@@ -296,7 +444,7 @@ def draw_treasure_chest(x, y):
     pygame.draw.circle(screen, GOLD, (x * CELL_SIZE + CELL_SIZE//2, y * CELL_SIZE + 18), 3)
 
 # 绘制迷宫
-def draw_maze(maze, spikes):
+def draw_maze(maze, spikes, monster=None):
     for y in range(ROWS):
         for x in range(COLS):
             rect = pygame.Rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
@@ -318,6 +466,10 @@ def draw_maze(maze, spikes):
     for spike in spikes:
         spike.draw(screen)
     
+    # 绘制怪物
+    if monster:
+        monster.draw(screen)
+    
     # 绘制终点宝箱
     draw_treasure_chest(COLS-2, ROWS-2)
 
@@ -325,22 +477,75 @@ def draw_maze(maze, spikes):
 def is_valid_move(maze, x, y):
     return 0 <= x < COLS and 0 <= y < ROWS and maze[y][x] == 0
 
+# 绘制开始菜单
+def draw_menu(normal_hovered, hard_hovered):
+    # 背景渐变
+    for y in range(HEIGHT):
+        color_value = max(20, 50 - y // 20)
+        pygame.draw.line(screen, (color_value, color_value, color_value), (0, y), (WIDTH, y))
+    
+    # 标题
+    title_font = pygame.font.SysFont("arial", 80, bold=True)
+    title_text = title_font.render("MAZE ADVENTURE", True, YELLOW)
+    title_shadow = title_font.render("MAZE ADVENTURE", True, (100, 100, 0))
+    
+    # 标题阴影效果
+    screen.blit(title_shadow, (WIDTH//2 - title_text.get_width()//2 + 3, HEIGHT//4 + 3))
+    screen.blit(title_text, (WIDTH//2 - title_text.get_width()//2, HEIGHT//4))
+    
+    # 副标题
+    subtitle_font = pygame.font.SysFont("arial", 36)
+    subtitle_text = subtitle_font.render("Choose Your Challenge", True, WHITE)
+    screen.blit(subtitle_text, (WIDTH//2 - subtitle_text.get_width()//2, HEIGHT//4 + 90))
+    
+    # 按钮区域背景
+    button_area = pygame.Rect(WIDTH//2 - 200, HEIGHT//2 - 50, 400, 200)
+    draw_ui_panel(button_area, 180)
+    
+    # 难度选项按钮
+    normal_button = pygame.Rect(WIDTH//2 - 150, HEIGHT//2, 300, 60)
+    hard_button = pygame.Rect(WIDTH//2 - 150, HEIGHT//2 + 80, 300, 60)
+    
+    draw_button("NORMAL MODE", normal_button, DARK_GREEN, GREEN, normal_hovered)
+    draw_button("HARD MODE", hard_button, DARK_PURPLE, PURPLE, hard_hovered)
+    
+    # 模式说明
+    desc_font = pygame.font.SysFont("arial", 18)
+    desc_lines = [
+        "Normal: Classic maze with spikes only",
+        "Hard: Advanced maze with chasing monster"
+    ]
+    
+    for i, line in enumerate(desc_lines):
+        desc_text = desc_font.render(line, True, WHITE)
+        screen.blit(desc_text, (WIDTH//2 - desc_text.get_width()//2, HEIGHT//2 + 160 + i * 25))
+    
+    # 操作提示
+    hint_font = pygame.font.SysFont("arial", 16)
+    hint_text = hint_font.render("Click to select your challenge", True, YELLOW)
+    screen.blit(hint_text, (WIDTH//2 - hint_text.get_width()//2, HEIGHT - 50))
+
 # 主游戏函数
 def main():
-    maze = generate_maze()
+    # 游戏状态
+    game_state = GameState.MENU
+    difficulty = None
+    
+    # 游戏变量
+    maze = None
+    spikes = []
+    monster = None
     player_x, player_y = 1, 1
-    
-    # 初始生成地刺 - 增加到30个
-    spikes = generate_random_spikes(maze, player_x, player_y, 30)
-    
     game_over = False
     win = False
-    
     move_delay = 0
     move_interval = 6
-    
-    # 地刺批次管理
     need_respawn = False
+    player_move_count = 0
+    
+    # 菜单选择
+    normal_hovered = False
+    hard_hovered = False
     
     last_time = pygame.time.get_ticks()
     
@@ -350,36 +555,120 @@ def main():
         dt = (current_time - last_time) / 1000.0
         last_time = current_time
         
+        mouse_pos = pygame.mouse.get_pos()
+        
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                # 菜单状态处理
+                if game_state == GameState.MENU:
+                    normal_button = pygame.Rect(WIDTH//2 - 150, HEIGHT//2, 300, 60)
+                    hard_button = pygame.Rect(WIDTH//2 - 150, HEIGHT//2 + 80, 300, 60)
+                    
+                    if normal_button.collidepoint(mouse_pos):
+                        difficulty = Difficulty.NORMAL
+                        game_state = GameState.PLAYING
+                        # 初始化游戏
+                        maze = generate_maze()
+                        player_x, player_y = 1, 1
+                        spikes = generate_random_spikes(maze, player_x, player_y, 30)
+                        monster = None  # Normal模式没有怪物
+                        game_over = False
+                        win = False
+                        player_move_count = 0
+                    
+                    elif hard_button.collidepoint(mouse_pos):
+                        difficulty = Difficulty.HARD
+                        game_state = GameState.PLAYING
+                        # 初始化游戏
+                        maze = generate_maze()
+                        player_x, player_y = 1, 1
+                        spikes = generate_random_spikes(maze, player_x, player_y, 30)
+                        monster = Monster(1, 1)  # Hard模式有怪物，出生在主角位置
+                        game_over = False
+                        win = False
+                        player_move_count = 0
+            
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r and (game_over or win):
-                    # 重新开始游戏
-                    maze = generate_maze()
-                    player_x, player_y = 1, 1
-                    spikes = generate_random_spikes(maze, player_x, player_y, 30)
-                    game_over = False
-                    win = False
+                # 游戏结束或胜利状态处理
+                if game_state in [GameState.GAME_OVER, GameState.VICTORY]:
+                    if event.key == pygame.K_r:  # 重新开始当前关卡
+                        game_state = GameState.PLAYING
+                        maze = generate_maze()
+                        player_x, player_y = 1, 1
+                        spikes = generate_random_spikes(maze, player_x, player_y, 30)
+                        if difficulty == Difficulty.HARD:
+                            monster = Monster(1, 1)  # 怪物出生在主角位置
+                        else:
+                            monster = None
+                        game_over = False
+                        win = False
+                        player_move_count = 0
+                    
+                    elif event.key == pygame.K_h:  # 切换到Hard模式
+                        difficulty = Difficulty.HARD
+                        game_state = GameState.PLAYING
+                        maze = generate_maze()
+                        player_x, player_y = 1, 1
+                        spikes = generate_random_spikes(maze, player_x, player_y, 30)
+                        monster = Monster(1, 1)  # 怪物出生在主角位置
+                        game_over = False
+                        win = False
+                        player_move_count = 0
+                    
+                    elif event.key == pygame.K_n:  # 切换到Normal模式
+                        difficulty = Difficulty.NORMAL
+                        game_state = GameState.PLAYING
+                        maze = generate_maze()
+                        player_x, player_y = 1, 1
+                        spikes = generate_random_spikes(maze, player_x, player_y, 30)
+                        monster = None
+                        game_over = False
+                        win = False
+                        player_move_count = 0
         
-        # 更新地刺动画并检查是否完成周期
-        all_cycle_completed = True
-        for spike in spikes:
-            spike.update(dt)
-            if not spike.cycle_completed:
-                all_cycle_completed = False
+        # 更新菜单悬停状态
+        if game_state == GameState.MENU:
+            normal_button = pygame.Rect(WIDTH//2 - 150, HEIGHT//2, 300, 60)
+            hard_button = pygame.Rect(WIDTH//2 - 150, HEIGHT//2 + 80, 300, 60)
+            normal_hovered = normal_button.collidepoint(mouse_pos)
+            hard_hovered = hard_button.collidepoint(mouse_pos)
         
-        # 当地刺批次完成完整周期后重新生成
-        if all_cycle_completed and len(spikes) > 0 and not need_respawn:
-            need_respawn = True
-        
-        # 在下一批地刺开始前重新生成位置
-        if need_respawn and all(not spike.active and not spike.visible for spike in spikes):
-            spikes = generate_random_spikes(maze, player_x, player_y, 30)
-            need_respawn = False
-        
-        # 处理连续移动
-        if not game_over and not win:
+        # 游戏进行中
+        if game_state == GameState.PLAYING:
+            # 更新地刺动画并检查是否完成周期
+            all_cycle_completed = True
+            for spike in spikes:
+                spike.update(dt)
+                if not spike.cycle_completed:
+                    all_cycle_completed = False
+            
+            # 当地刺批次完成完整周期后重新生成
+            if all_cycle_completed and len(spikes) > 0 and not need_respawn:
+                need_respawn = True
+            
+            # 在下一批地刺开始前重新生成位置
+            if need_respawn and all(not spike.active and not spike.visible for spike in spikes):
+                spikes = generate_random_spikes(maze, player_x, player_y, 30)
+                need_respawn = False
+            
+            # 更新怪物（只在Hard模式）
+            if monster and difficulty == Difficulty.HARD:
+                # 玩家移动5格后激活怪物
+                if not monster.active and player_move_count >= 5:
+                    monster.activate(player_x, player_y, maze)
+                
+                # 怪物一直在移动（即使没有激活也会更新位置）
+                monster.update(dt, player_x, player_y, maze)
+                
+                # 检查怪物碰撞
+                if monster.active and monster.x == player_x and monster.y == player_y:
+                    game_over = True
+                    game_state = GameState.GAME_OVER
+            
+            # 处理连续移动
             keys = pygame.key.get_pressed()
             move_delay += 1
             
@@ -398,54 +687,97 @@ def main():
                 if is_valid_move(maze, new_x, new_y) and (new_x, new_y) != (player_x, player_y):
                     player_x, player_y = new_x, new_y
                     move_delay = 0
+                    player_move_count += 1
                     
+                    # 检查是否到达终点
                     if player_x == COLS-2 and player_y == ROWS-2:
                         win = True
+                        game_state = GameState.VICTORY
                     
                     # 检查是否碰到活跃的地刺
                     for spike in spikes:
                         if spike.active and spike.x == player_x and spike.y == player_y:
                             game_over = True
+                            game_state = GameState.GAME_OVER
         
         # 绘制游戏
         screen.fill(BLACK)
-        draw_maze(maze, spikes)
-        draw_player(player_x, player_y)
         
-        # 显示游戏状态
-        if game_over:
-            panel_rect = pygame.Rect(WIDTH//2 - 200, HEIGHT//2 - 100, 400, 200)
+        if game_state == GameState.MENU:
+            draw_menu(normal_hovered, hard_hovered)
+        
+        elif game_state == GameState.PLAYING:
+            draw_maze(maze, spikes, monster)
+            draw_player(player_x, player_y)
+            
+            # 显示关卡信息
+            level_font = pygame.font.SysFont("arial", 20)
+            mode_text = "Normal" if difficulty == Difficulty.NORMAL else "Hard"
+            level_text = level_font.render(f"Mode: {mode_text}", True, WHITE)
+            screen.blit(level_text, (10, 10))
+            
+            # 显示怪物激活倒计时（Hard模式）
+            if difficulty == Difficulty.HARD and monster and not monster.active:
+                count_font = pygame.font.SysFont("arial", 16)
+                count_text = count_font.render(f"Monster activates in: {5 - player_move_count} moves", True, YELLOW)
+                screen.blit(count_text, (10, 35))
+        
+        # 显示游戏结束状态
+        elif game_state == GameState.GAME_OVER:
+            draw_maze(maze, spikes, monster)
+            draw_player(player_x, player_y)
+            
+            panel_rect = pygame.Rect(WIDTH//2 - 250, HEIGHT//2 - 120, 500, 240)
             draw_ui_panel(panel_rect)
             
             font_large = pygame.font.SysFont("arial", 72, bold=True)
-            font_small = pygame.font.SysFont("arial", 36)
+            font_medium = pygame.font.SysFont("arial", 28)
             
             text = font_large.render("GAME OVER", True, RED)
             screen.blit(text, (WIDTH//2 - text.get_width()//2, HEIGHT//2 - 80))
             
-            restart_text = font_small.render("Press R to Restart", True, WHITE)
+            restart_text = font_medium.render("Press R to Restart", True, WHITE)
             screen.blit(restart_text, (WIDTH//2 - restart_text.get_width()//2, HEIGHT//2 + 20))
             
-        elif win:
-            panel_rect = pygame.Rect(WIDTH//2 - 200, HEIGHT//2 - 100, 400, 200)
+            if difficulty == Difficulty.NORMAL:
+                switch_text = font_medium.render("Press H for Hard Mode", True, YELLOW)
+            else:
+                switch_text = font_medium.render("Press N for Normal Mode", True, YELLOW)
+            screen.blit(switch_text, (WIDTH//2 - switch_text.get_width()//2, HEIGHT//2 + 60))
+        
+        # 显示胜利状态
+        elif game_state == GameState.VICTORY:
+            draw_maze(maze, spikes, monster)
+            draw_player(player_x, player_y)
+            
+            panel_rect = pygame.Rect(WIDTH//2 - 250, HEIGHT//2 - 120, 500, 240)
             draw_ui_panel(panel_rect)
             
             font_large = pygame.font.SysFont("arial", 72, bold=True)
-            font_small = pygame.font.SysFont("arial", 36)
+            font_medium = pygame.font.SysFont("arial", 28)
             
             text = font_large.render("VICTORY!", True, GREEN)
             screen.blit(text, (WIDTH//2 - text.get_width()//2, HEIGHT//2 - 80))
             
-            restart_text = font_small.render("Press R to Restart", True, WHITE)
+            restart_text = font_medium.render("Press R to Restart", True, WHITE)
             screen.blit(restart_text, (WIDTH//2 - restart_text.get_width()//2, HEIGHT//2 + 20))
+            
+            if difficulty == Difficulty.NORMAL:
+                switch_text = font_medium.render("Press H for Hard Mode", True, YELLOW)
+            else:
+                switch_text = font_medium.render("Press N for Normal Mode", True, YELLOW)
+            screen.blit(switch_text, (WIDTH//2 - switch_text.get_width()//2, HEIGHT//2 + 60))
         
         # 显示操作说明
-        controls_bg = pygame.Rect(5, HEIGHT - 35, WIDTH - 10, 30)
-        draw_ui_panel(controls_bg, 150)
-        
-        font = pygame.font.SysFont("arial", 16)
-        controls_text = font.render("Arrow Keys: Move | Avoid Random Spikes | Find the Treasure Chest", True, WHITE)
-        screen.blit(controls_text, (WIDTH//2 - controls_text.get_width()//2, HEIGHT - 28))
+        if game_state == GameState.PLAYING:
+            controls_bg = pygame.Rect(5, HEIGHT - 35, WIDTH - 10, 30)
+            draw_ui_panel(controls_bg, 150)
+            
+            font = pygame.font.SysFont("arial", 16)
+            controls_text = font.render("Arrow Keys: Move | Avoid Spikes" + 
+                                      (" | Escape Monster" if difficulty == Difficulty.HARD else ""), 
+                                      True, WHITE)
+            screen.blit(controls_text, (WIDTH//2 - controls_text.get_width()//2, HEIGHT - 28))
         
         pygame.display.flip()
         clock.tick(FPS)
